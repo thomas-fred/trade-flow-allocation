@@ -1,4 +1,5 @@
 import os
+import multiprocessing
 import time
 
 import igraph as ig
@@ -58,10 +59,12 @@ def route_from_node(from_node: str, od: pd.DataFrame, graph: ig.Graph) -> RouteR
 
         routes[from_node] = {destination_node: (value_kusd, volume_tons, routes_edge_list[i])}
 
+    print(f"{from_node} completed...", end="\r")
+
     return routes
 
 
-def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame) -> tuple[RouteResult, gpd.GeoDataFrame]:
+def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) -> tuple[RouteResult, gpd.GeoDataFrame]:
     """
     Route flows from origins to destinations across graph. Record value and
     volume flowing across each edge.
@@ -71,6 +74,7 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame) -> tuple[Rou
             'partner_GID_0', should also contain 'value_kusd' and 'volume_tons'.
         edges: Table of edges to construct graph from. First column should be
             source node id and second destination node id.
+        n_cpu: Number of CPUs to use for routing.
 
     Returns:
         Mapping from source node, to destination country node, to list of edge
@@ -93,17 +97,21 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame) -> tuple[Rou
     start = time.time()
     from_nodes = od.id.unique()[:30]
     routes = []
-    for i, from_node in enumerate(from_nodes):
-
-        routes.append(route_from_node(from_node, od, graph))
-        print(f"{i + 1} of {len(from_nodes)}, {from_node}", end="\r")
+    args = ((from_node, od, graph) for from_node in from_nodes)
+    if n_cpu > 1:
+        with multiprocessing.get_context("spawn").Pool(processes=n_cpu) as pool:
+            routes = pool.starmap(route_from_node, args)
+    else:
+        for arg in args:
+            routes.append(route_from_node(*arg))
 
     print("\r")
     print(f"Routing completed in {time.time() - start:.2f}s")
 
-    print("Assigning flows to edges...")
     # combine our list of singleton dicts into one dict with multiple keys
     routes = {k: v for item in routes for (k, v) in item.items()}
+
+    print("Assigning flows to edges...")
     for from_node, from_node_routes in routes.items():
         for destination_country, route_data in from_node_routes.items():
             value_kusd, volume_t, integer_edge_ids = route_data
@@ -130,7 +138,7 @@ if __name__ == "__main__":
     # only keep most significant pairs, drops number from ~21M -> ~2M
     od = od[od.volume_tons > 5]
 
-    routes, edges_with_flows = route_from_all_nodes(od, edges)
+    routes, edges_with_flows = route_from_all_nodes(od, edges, 1)
 
     print("Writing flows to disk...")
     edges_with_flows.to_parquet("edges_with_flows.gpq")
