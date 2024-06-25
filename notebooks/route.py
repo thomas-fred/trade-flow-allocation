@@ -1,23 +1,69 @@
-import collections
 import os
 import time
 
 import igraph as ig
 import geopandas as gpd
-import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
-import shapely
-from tqdm import tqdm
 
 
-# source_node -> destination country e.g. GID_0_GBR -> list of integer edge ids
-RouteResult = dict[str, dict[str, list[int]]]
+# source node       -> destination country  -> (value kUSD, volume t,   [integer edge ids])
+# thailand_4_123    -> GID_0_GBR            -> (24.2,       4.1,        [432, 7, 123, ...])
+RouteResult = dict[str, dict[str, tuple[float, float, list[int]]]]
 
 
-def route(od: pd.DataFrame, edges: gpd.GeoDataFrame) -> tuple[RouteResult, gpd.GeoDataFrame]:
+def route_from_node(from_node: str, od: pd.DataFrame, graph: ig.Graph) -> RouteResult:
     """
-    Route flows from origin to destination across graph. Record value and
+    Route flows from single 'from_node' to destinations across graph. Record value and
+    volume flowing across each edge.
+
+    Args:
+        from_node: Node ID of source node.
+        od: Table of flows from origin node 'id' to destination country
+            'partner_GID_0', should also contain 'value_kusd' and 'volume_tons'.
+        graph: Graph to route over.
+
+    Returns:
+        Mapping from source node, to destination country node, to value of
+            flow, volume of flow and list of edge ids of route.
+    """
+
+    from_node_od = od[od.id == from_node]
+    destination_nodes = [f"GID_0_{iso_a3}" for iso_a3 in from_node_od.partner_GID_0.unique()]
+
+    try:
+        routes_edge_list: list[list[int]] = graph.get_shortest_paths(
+            f"road_{from_node}",
+            destination_nodes,
+            weights="cost_USD_t",
+            output="epath"
+        )
+    except ValueError as error:
+        if "no such vertex" in str(error):
+            print(f"{error}... skipping destination")
+            pass
+
+    assert len(routes_edge_list) == len(destination_nodes)
+
+    routes: RouteResult = {}
+    for i, destination_node in enumerate(destination_nodes):
+
+        # lookup trade value and volume for each pairing of from_node and partner country
+        # GID_0_GBR -> GBR
+        iso_a3 = destination_node.split("_")[-1]
+        route = from_node_od[
+            (from_node_od.id == from_node) & (from_node_od.partner_GID_0 == iso_a3)
+        ]
+        value_kusd, = route.value_kusd
+        volume_tons, = route.volume_tons
+
+        routes[from_node] = {destination_node: (value_kusd, volume_tons, routes_edge_list[i])}
+
+    return routes
+
+
+def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame) -> tuple[RouteResult, gpd.GeoDataFrame]:
+    """
+    Route flows from origins to destinations across graph. Record value and
     volume flowing across each edge.
 
     Args:
@@ -45,45 +91,24 @@ def route(od: pd.DataFrame, edges: gpd.GeoDataFrame) -> tuple[RouteResult, gpd.G
 
     print("Routing...")
     start = time.time()
-    routes: RouteResult = {}
-    from_nodes = od.id.unique()[:100]
+    from_nodes = od.id.unique()[:30]
+    routes = []
     for i, from_node in enumerate(from_nodes):
+
+        routes.append(route_from_node(from_node, od, graph))
         print(f"{i + 1} of {len(from_nodes)}, {from_node}", end="\r")
 
-        from_node_od = od[od.id == from_node]
-        dest_nodes = [f"GID_0_{iso_a3}" for iso_a3 in from_node_od.partner_GID_0.unique()]
-
-        try:
-            routes_edge_list: list[list[int]] = graph.get_shortest_paths(
-                f"road_{from_node}",
-                dest_nodes,
-                weights="cost_USD_t",
-                output="epath"
-            )
-        except ValueError as error:
-            if "no such vertex" in str(error):
-                print(f"{error}... skipping destination")
-                continue
-
-        # store routes
-        routes[from_node] = dict(zip(dest_nodes, routes_edge_list))
-
-        for dest_node, route_edge_ids in routes[from_node].items():
-
-            # lookup trade value and volume for each pairing of from_node and partner country
-            # GID_0_GBR -> GBR
-            iso_a3 = dest_node.split("_")[-1]
-            route = from_node_od[
-                (from_node_od.id == from_node) & (from_node_od.partner_GID_0 == iso_a3)
-            ]
-            value_kusd, = route.value_kusd
-            volume_tons, = route.volume_tons
-
-            # increment edges with flows
-            edges.iloc[route_edge_ids, value_col_id] += value_kusd
-            edges.iloc[route_edge_ids, volume_col_id] += volume_tons
-
+    print("\r")
     print(f"Routing completed in {time.time() - start:.2f}s")
+
+    print("Assigning flows to edges...")
+    # combine our list of singleton dicts into one dict with multiple keys
+    routes = {k: v for item in routes for (k, v) in item.items()}
+    for from_node, from_node_routes in routes.items():
+        for destination_country, route_data in from_node_routes.items():
+            value_kusd, volume_t, integer_edge_ids = route_data
+            edges.iloc[integer_edge_ids, value_col_id] = value_kusd
+            edges.iloc[integer_edge_ids, volume_col_id] = volume_t
 
     return routes, edges
 
@@ -95,7 +120,6 @@ if __name__ == "__main__":
     print("Reading network...")
     # read in global multi-modal transport network
     network_dir = os.path.join(root_dir, "results/multi-modal_network/")
-    nodes = gpd.read_parquet(os.path.join(network_dir, "nodes.gpq"))
     edges = gpd.read_parquet(os.path.join(network_dir, "edges.gpq"))
 
     print("Reading OD matrix...")
@@ -106,7 +130,7 @@ if __name__ == "__main__":
     # only keep most significant pairs, drops number from ~21M -> ~2M
     od = od[od.volume_tons > 5]
 
-    routes: RouteResult, edges_with_flows: gpd.GeoDataFrame = route(od, edges)
+    routes, edges_with_flows = route_from_all_nodes(od, edges)
 
     print("Writing flows to disk...")
     edges_with_flows.to_parquet("edges_with_flows.gpq")
