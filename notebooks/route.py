@@ -12,7 +12,7 @@ import pandas as pd
 RouteResult = dict[str, dict[str, tuple[float, float, list[int]]]]
 
 
-def route_from_node(from_node: str, od: pd.DataFrame, graph: ig.Graph) -> RouteResult:
+def route_from_node(from_node: str, od: pd.DataFrame, graph_filepath: str) -> RouteResult:
     """
     Route flows from single 'from_node' to destinations across graph. Record value and
     volume flowing across each edge.
@@ -21,12 +21,14 @@ def route_from_node(from_node: str, od: pd.DataFrame, graph: ig.Graph) -> RouteR
         from_node: Node ID of source node.
         od: Table of flows from origin node 'id' to destination country
             'partner_GID_0', should also contain 'value_kusd' and 'volume_tons'.
-        graph: Graph to route over.
+        graph_filepath: Filepath of pickled igraph.Graph to route over.
 
     Returns:
         Mapping from source node, to destination country node, to value of
             flow, volume of flow and list of edge ids of route.
     """
+
+    graph = ig.Graph.Read_Pickle(graph_filepath)
 
     from_node_od = od[od.id == from_node]
     destination_nodes = [f"GID_0_{iso_a3}" for iso_a3 in from_node_od.partner_GID_0.unique()]
@@ -88,6 +90,10 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
     # use_vids=False as edges.from_id and edges_to_id are not integers
     graph = ig.Graph.DataFrame(edges, directed=True, use_vids=False)
 
+    print("Writing graph to disk...")
+    graph_filepath = "graph.pickle"
+    graph.write_pickle(graph_filepath)
+
     edges["value_kusd"] = 0
     edges["volume_tons"] = 0
     value_col_id = edges.columns.get_loc("value_kusd")
@@ -97,9 +103,9 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
     start = time.time()
     from_nodes = od.id.unique()[:30]
     routes = []
-    args = ((from_node, od, graph) for from_node in from_nodes)
+    args = ((from_node, od, graph_filepath) for from_node in from_nodes)
     if n_cpu > 1:
-        with multiprocessing.get_context("spawn").Pool(processes=n_cpu) as pool:
+        with multiprocessing.get_context("fork").Pool(processes=n_cpu) as pool:
             routes = pool.starmap(route_from_node, args)
     else:
         for arg in args:
@@ -138,7 +144,7 @@ if __name__ == "__main__":
     # only keep most significant pairs, drops number from ~21M -> ~2M
     od = od[od.volume_tons > 5]
 
-    routes, edges_with_flows = route_from_all_nodes(od, edges, 1)
+    routes, edges_with_flows = route_from_all_nodes(od, edges, 64)
 
     print("Writing flows to disk...")
     edges_with_flows.to_parquet("edges_with_flows.gpq")
