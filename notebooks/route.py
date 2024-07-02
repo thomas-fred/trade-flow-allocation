@@ -77,10 +77,9 @@ def route_from_node(from_node: str) -> RouteResult:
     else:
         return routes
 
+    # lookup trade value and volume for each pairing of from_node and partner country
     for i, destination_node in enumerate(destination_nodes):
-
-        # lookup trade value and volume for each pairing of from_node and partner country
-        # GID_0_GBR -> GBR
+        # "GID_0_GBR" -> "GBR"
         iso_a3 = destination_node.split("_")[-1]
         route = from_node_od[
             (from_node_od.id == from_node) & (from_node_od.partner_GID_0 == iso_a3)
@@ -156,7 +155,13 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
 
 if __name__ == "__main__":
 
-    n_cpu = int(sys.argv[1])
+    try:
+        n_cpu = int(sys.argv[1])
+    except IndexError:
+        raise RuntimeError(
+            "Please give a number of CPUs to use for allocation as argument, e.g.\n"
+            f"python {sys.argv[0]} 4"
+        )
 
     root_dir = ".."
 
@@ -176,6 +181,9 @@ if __name__ == "__main__":
 
     routes = route_from_all_nodes(od, edges, n_cpu)
 
+    flow_allocation_dir = os.path.join(root_dir, "results/flow_allocation/")
+    os.makedirs(flow_allocation_dir, exist_ok=True)
+
     print("Writing routes to disk as JSON...")
     with open(os.path.join(flow_allocation_dir, 'routes.json'), 'w') as fp:
         json.dump(routes, fp, indent=2)
@@ -192,8 +200,6 @@ if __name__ == "__main__":
             edges.iloc[edge_indicies, volume_col_id] += route_data["volume_tons"]
 
     print("Writing edge flows to disk as geoparquet...")
-    flow_allocation_dir = os.path.join(root_dir, "results/flow_allocation/")
-    os.makedirs(flow_allocation_dir, exist_ok=True)
-    edges_with_flows.to_parquet(os.path.join(flow_allocation_dir, "edges_with_flows.gpq"))
+    edges.to_parquet(os.path.join(flow_allocation_dir, "edges_with_flows.gpq"))
 
     print("Done")
