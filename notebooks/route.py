@@ -1,38 +1,63 @@
+import json
 import os
 import multiprocessing
 import time
+import sys
 
 import igraph as ig
 import geopandas as gpd
 import pandas as pd
 
 
-# source node       -> destination country  -> (value kUSD, volume t,   [integer edge ids])
-# thailand_4_123    -> GID_0_GBR            -> (24.2,       4.1,        [432, 7, 123, ...])
-RouteResult = dict[str, dict[str, tuple[float, float, list[int]]]]
+# dict containing:
+# 'value_kusd' -> float
+# 'volume_tons' -> float
+# 'edge_indicies' -> list[indicies]
+FlowResult = dict[str, float | list[int]]
+
+# nested dict with FlowResult leaves
+# source node       -> destination country  -> FlowResult dict
+# e.g.
+# 'thailand_4_123'  -> 'GID_0_GBR'          -> FlowResult dict
+RouteResult = dict[str, dict[str, FlowResult]]
 
 
-def route_from_node(from_node: str, od: pd.DataFrame, graph_filepath: str) -> RouteResult:
+def init_worker(graph_filepath: str, od_filepath: str) -> None:
+    """
+    Create global variables referencing graph and OD to persist through worker lifetime.
+
+    Args:
+        graph_filepath: Filepath of pickled igraph.Graph to route over.
+        od_filepath: Filepath to table of flows from origin node 'id' to
+            destination country 'partner_GID_0', should also contain 'value_kusd'
+            and 'volume_tons'.
+    """
+    print(f"Process {os.getpid()} initialising...")
+    global graph
+    graph = ig.Graph.Read_Pickle(graph_filepath)
+    global od
+    od = pd.read_parquet(od_filepath)
+    return
+
+
+def route_from_node(from_node: str) -> RouteResult:
     """
     Route flows from single 'from_node' to destinations across graph. Record value and
     volume flowing across each edge.
 
     Args:
         from_node: Node ID of source node.
-        od: Table of flows from origin node 'id' to destination country
-            'partner_GID_0', should also contain 'value_kusd' and 'volume_tons'.
-        graph_filepath: Filepath of pickled igraph.Graph to route over.
 
     Returns:
         Mapping from source node, to destination country node, to value of
             flow, volume of flow and list of edge ids of route.
     """
-
-    graph = ig.Graph.Read_Pickle(graph_filepath)
+    print(f"Process {os.getpid()} routing {from_node}...")
 
     from_node_od = od[od.id == from_node]
     destination_nodes = [f"GID_0_{iso_a3}" for iso_a3 in from_node_od.partner_GID_0.unique()]
 
+    routes_edge_list = []
     try:
         routes_edge_list: list[list[int]] = graph.get_shortest_paths(
             f"road_{from_node}",
@@ -45,9 +70,13 @@ def route_from_node(from_node: str, od: pd.DataFrame, graph_filepath: str) -> Ro
             print(f"{error}... skipping destination")
             pass
 
-    assert len(routes_edge_list) == len(destination_nodes)
-
     routes: RouteResult = {}
+
+    if routes_edge_list:
+        assert len(routes_edge_list) == len(destination_nodes)
+    else:
+        return routes
+
     for i, destination_node in enumerate(destination_nodes):
 
         # lookup trade value and volume for each pairing of from_node and partner country
@@ -59,17 +88,20 @@ def route_from_node(from_node: str, od: pd.DataFrame, graph_filepath: str) -> Ro
         value_kusd, = route.value_kusd
         volume_tons, = route.volume_tons
 
-        routes[from_node] = {destination_node: (value_kusd, volume_tons, routes_edge_list[i])}
-
-    print(f"{from_node} completed...", end="\r")
+        routes[from_node] = {
+            destination_node: {
+                "value_kusd": value_kusd,
+                "volume_tons": volume_tons,
+                "edge_indicies": routes_edge_list[i]
+            }
+        }
 
     return routes
 
 
-def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) -> tuple[RouteResult, gpd.GeoDataFrame]:
+def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) -> RouteResult:
     """
-    Route flows from origins to destinations across graph. Record value and
-    volume flowing across each edge.
+    Route flows from origins to destinations across graph.
 
     Args:
         od: Table of flows from origin node 'id' to destination country
@@ -79,10 +111,9 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
         n_cpu: Number of CPUs to use for routing.
 
     Returns:
-        Mapping from source node, to destination country node, to list of edge
-            ids connecting them.
-        Mutated edge table with 'value_kusd' and 'volume_tons' columns with
-            accumulated flows.
+        Mapping from source node, to destination country node, to flow in value
+            and volume along this route and list of edge indicies constituting
+            the route.
     """
 
     print("Creating graph...")
@@ -94,40 +125,38 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
     graph_filepath = "graph.pickle"
     graph.write_pickle(graph_filepath)
 
-    edges["value_kusd"] = 0
-    edges["volume_tons"] = 0
-    value_col_id = edges.columns.get_loc("value_kusd")
-    volume_col_id = edges.columns.get_loc("volume_tons")
+    print("Writing OD to disk...")
+    od_filepath = "od.pq"
+    od.to_parquet(od_filepath)
 
     print("Routing...")
     start = time.time()
-    from_nodes = od.id.unique()[:30]
+    from_nodes = od.id.unique()
     routes = []
-    args = ((from_node, od, graph_filepath) for from_node in from_nodes)
+    args = ((from_node,) for from_node in from_nodes)
     if n_cpu > 1:
-        with multiprocessing.get_context("fork").Pool(processes=n_cpu) as pool:
+        # as each process is created, it will load the graph from disk in init_worker
+        # and then persist it in memory between chunks of work
+        with multiprocessing.Pool(
+            processes=n_cpu,
+            initializer=init_worker,
+            initargs=(graph_filepath, od_filepath),
+        ) as pool:
             routes = pool.starmap(route_from_node, args)
     else:
         for arg in args:
             routes.append(route_from_node(*arg))
 
-    print("\r")
+    print("\n")
     print(f"Routing completed in {time.time() - start:.2f}s")
 
     # combine our list of singleton dicts into one dict with multiple keys
-    routes = {k: v for item in routes for (k, v) in item.items()}
-
-    print("Assigning flows to edges...")
-    for from_node, from_node_routes in routes.items():
-        for destination_country, route_data in from_node_routes.items():
-            value_kusd, volume_t, integer_edge_ids = route_data
-            edges.iloc[integer_edge_ids, value_col_id] = value_kusd
-            edges.iloc[integer_edge_ids, volume_col_id] = volume_t
-
-    return routes, edges
+    return {k: v for item in routes for (k, v) in item.items()}
 
 
 if __name__ == "__main__":
+
+    n_cpu = int(sys.argv[1])
 
     root_dir = ".."
 
@@ -141,12 +170,30 @@ if __name__ == "__main__":
     od_dir = os.path.join(root_dir, "results/input/trade_matrix")
     od = pd.read_parquet(os.path.join(od_dir, "trade_nodes_total.parquet"))
 
-    # only keep most significant pairs, drops number from ~21M -> ~2M
-    od = od[od.volume_tons > 5]
+    # only keep most significant pairs
+    # 5t threshold drops THL road -> GID_0 OD from ~21M -> ~2M
+    od = od[od.volume_tons > 1]
 
-    routes, edges_with_flows = route_from_all_nodes(od, edges, 64)
+    routes = route_from_all_nodes(od, edges, n_cpu)
 
-    print("Writing flows to disk...")
-    edges_with_flows.to_parquet("edges_with_flows.gpq")
+    print("Writing routes to disk as JSON...")
+    with open(os.path.join(flow_allocation_dir, 'routes.json'), 'w') as fp:
+        json.dump(routes, fp, indent=2)
+
+    print("Assigning route flows to edges...")
+    edges["value_kusd"] = 0
+    edges["volume_tons"] = 0
+    value_col_id = edges.columns.get_loc("value_kusd")
+    volume_col_id = edges.columns.get_loc("volume_tons")
+    for from_node, from_node_routes in routes.items():
+        for destination_country, route_data in from_node_routes.items():
+            edge_indicies = route_data["edge_indicies"]
+            edges.iloc[edge_indicies, value_col_id] += route_data["value_kusd"]
+            edges.iloc[edge_indicies, volume_col_id] += route_data["volume_tons"]
+
+    print("Writing edge flows to disk as geoparquet...")
+    flow_allocation_dir = os.path.join(root_dir, "results/flow_allocation/")
+    os.makedirs(flow_allocation_dir, exist_ok=True)
+    edges_with_flows.to_parquet(os.path.join(flow_allocation_dir, "edges_with_flows.gpq"))
 
     print("Done")
