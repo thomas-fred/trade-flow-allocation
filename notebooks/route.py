@@ -1,3 +1,7 @@
+"""
+Allocate flows (value and volume) from an origin-destination (OD) file across a network of edges.
+"""
+
 import json
 import os
 import multiprocessing
