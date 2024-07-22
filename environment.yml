@@ -1,0 +1,57 @@
+# to install this environment:
+# micromamba create -f environment.yml -y
+name: wb_flood
+channels:
+  - conda-forge  # majority of dependencies
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:  # delegate to pip for non-conda packages
+    - nismod-snail==0.5.2 # vector-raster intersections
+    - osmium==3.2.0       # OpenStreetMap protobuf handling
+    - snkit==1.8.1        # spatial network cleaning
+    # required zenodo_get version not available via conda-forge
+    - zenodo_get>=1.5.1   # data download client, zenodo API broken w/ <1.5.1
+  - black               # formatter
+  - cython==0.29.28     # c--python interface
+  - contextily          # basemaps for plots
+  - datashader          # plotting large datasets
+  - dask<2024.3.0       # larger-than-memory computing
+  - flake8              # linter
+  - gdal>=3.3           # command-line tools for spatial data
+  - geopandas==0.14.1   # geospatial dataframes
+  - geopy               # geocoding client
+  - igraph              # network modelling
+  - ipykernel           # notebook support
+  - jupyter             # notebook support
+  - jq                  # JSON processing tool
+  - matplotlib==3.7.1   # basic plotting
+  - nb_conda_kernels    # notebook support
+  - netCDF4             # NetCDF file format
+  - networkx            # networks
+  - numpy               # data arrays
+  - openpyxl            # Excel file format
+  - osmium-tool==1.14.0 # openstreetmap extracts
+  - pathos              # multiprocessing
+  - pandas==2.0.3       # tabular data
+  - pyarrow>=13.0.0     # parquet file format, Arrow data exchange
+  - pyogrio             # vectorised geospatial file i/o
+  - pyproj>=3.3.1       # geographic projections
+  - pyrosm              # python OpenStreetMap network reader
+  - py-spy              # profiling tool
+  - pytest              # testing
+  - pytest-xdist        # parallelise testing across CPUs
+  - rasterio            # raster file formats
+  - rasterstats         # raster statistics
+  - requests            # make HTTP requests
+  - rioxarray           # xarray datasets from raster files
+  - scipy               # scientific computing library
+  - spatialpandas       # plotting large datasets
+  - bioconda::snakemake==7.18.2   # workflow management
+  # https://github.com/snakemake/snakemake/issues/1891
+  - tabulate==0.8.10    # snakemake dependency with bug in 9.0.0, pin previous
+  - tqdm==4.62.3        # progress bars
+  - wget                # file downloader
+  # pin xarray as suspect 2023.11.0 duplicates/nisnames coords when concatenating
+  - xarray==2023.10.1   # named n-dimensional arrays
