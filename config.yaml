@@ -1,0 +1,20 @@
+# Country for which trade OD has been prepared, and we are to route land trade flows
+study_country_iso_a3: "THA"
+
+# transport cost information
+road_cost_USD_t_km: 0.05
+road_cost_USD_t_h: 0.48
+road_default_speed_limit_km_h: 80
+rail_cost_USD_t_km: 0.05
+rail_cost_USD_t_h: 0.38
+rail_average_freight_speed_km_h: 40
+
+# Cost of changing transport mode in USD per tonne
+# from mistral/ccg-critical-minerals/processed_data/transport_costs/intermodal.xlsx, 20240611
+intermodal_cost_USD_t:
+  road_rail: 5
+  maritime_road: 4
+  maritime_rail: 5
+
+# Drop trade flows with less volume than this (accelerate flow allocation)
+minimum_flow_volume_t: 5

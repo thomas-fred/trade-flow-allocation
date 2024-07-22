@@ -1,5 +1,6 @@
 archive
 results
+.snakemake
 *.png
 *.pdf
 *.jpg
@@ -8,3 +9,5 @@ results
 */.ipynb_checkpoints
 *.pickle
 *.pq
+*.egg-info/
+__pycache__/
