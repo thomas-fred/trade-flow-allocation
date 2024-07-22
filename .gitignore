@@ -1,0 +1,10 @@
+archive
+results
+*.png
+*.pdf
+*.jpg
+*.gpq
+*.gpkg
+*/.ipynb_checkpoints
+*.pickle
+*.pq
