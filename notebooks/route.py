@@ -73,6 +73,8 @@ def route_from_node(from_node: str) -> RouteResult:
         if "no such vertex" in str(error):
             print(f"{error}... skipping destination")
             pass
+        else:
+            raise error
 
     routes: RouteResult = {}
 
@@ -137,24 +139,23 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
     from_nodes = od.id.unique()
     routes = []
     args = ((from_node,) for from_node in from_nodes)
-    if n_cpu > 1:
-        # as each process is created, it will load the graph from disk in init_worker
-        # and then persist it in memory between chunks of work
-        with multiprocessing.Pool(
-            processes=n_cpu,
-            initializer=init_worker,
-            initargs=(graph_filepath, od_filepath),
-        ) as pool:
-            routes = pool.starmap(route_from_node, args)
-    else:
-        for arg in args:
-            routes.append(route_from_node(*arg))
+    # as each process is created, it will load the graph from disk in init_worker
+    # and then persist these in memory as globals between chunks of work
+    with multiprocessing.Pool(
+        processes=n_cpu,
+        initializer=init_worker,
+        initargs=(graph_filepath, od_filepath),
+    ) as pool:
+        routes = pool.starmap(route_from_node, args)
 
     print("\n")
     print(f"Routing completed in {time.time() - start:.2f}s")
 
     # combine our list of singleton dicts into one dict with multiple keys
-    return {k: v for item in routes for (k, v) in item.items()}
+    combined = {k: v for item in routes for (k, v) in item.items()}
+    if len(combined) != len(routes):
+        breakpoint()
+    return combined
 
 
 if __name__ == "__main__":
@@ -173,15 +174,23 @@ if __name__ == "__main__":
     # read in global multi-modal transport network
     network_dir = os.path.join(root_dir, "results/multi-modal_network/")
     edges = gpd.read_parquet(os.path.join(network_dir, "edges.gpq"))
+    available_destinations = edges[edges["mode"] == "imaginary"].to_id.unique()
+    available_country_destinations = [d.split("_")[-1] for d in available_destinations if d.startswith("GID_")]
 
     print("Reading OD matrix...")
     # read in trade OD matrix
     od_dir = os.path.join(root_dir, "results/input/trade_matrix")
     od = pd.read_parquet(os.path.join(od_dir, "trade_nodes_total.parquet"))
+    print(f"OD has {len(od):,d} flows")
 
-    # only keep most significant pairs
     # 5t threshold drops THL road -> GID_0 OD from ~21M -> ~2M
-    od = od[od.volume_tons > 1]
+    minimum_flow_volume_tons = 5
+    od = od[od.volume_tons > minimum_flow_volume_tons]
+    print(f"After dropping flows with volume < {minimum_flow_volume_tons}t, OD has {len(od):,d} flows")
+
+    # drop any flows we can't find a route to
+    od = od[od.partner_GID_0.isin(available_country_destinations)]
+    print(f"After dropping unrouteable destination countries, OD has {len(od):,d} flows")
 
     routes = route_from_all_nodes(od, edges, n_cpu)
 
