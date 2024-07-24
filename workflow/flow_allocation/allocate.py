@@ -1,6 +1,7 @@
 
 import geopandas as gpd
 import pandas as pd
+from tqdm import tqdm
 
 from trade_flow.routing import route_from_all_nodes, RouteResult
 
@@ -37,7 +38,7 @@ if __name__ == "__main__":
     edges["volume_tons"] = 0
     value_col_id = edges.columns.get_loc("value_kusd")
     volume_col_id = edges.columns.get_loc("volume_tons")
-    for (from_node, destination_country), route_data in routes.items():
+    for (from_node, destination_country), route_data in tqdm(routes.items()):
         edges.iloc[route_data["edge_indices"], value_col_id] += route_data["value_kusd"]
         edges.iloc[route_data["edge_indices"], volume_col_id] += route_data["volume_tons"]
 
