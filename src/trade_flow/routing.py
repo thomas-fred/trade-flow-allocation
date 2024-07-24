@@ -2,8 +2,8 @@
 Allocate flows (value and volume) from an origin-destination (OD) file across a network of edges.
 """
 
-import os
 import multiprocessing
+import os
 import tempfile
 import time
 
@@ -18,11 +18,11 @@ import pandas as pd
 # 'edge_indicies' -> list[indicies]
 FlowResult = dict[str, float | list[int]]
 
-# nested dict with FlowResult leaves
-# source node       -> destination country  -> FlowResult dict
+# dict with FlowResult values
+# source node, destination country -> FlowResult dict
 # e.g.
-# 'thailand_4_123'  -> 'GID_0_GBR'          -> FlowResult dict
-RouteResult = dict[str, dict[str, FlowResult]]
+# ('thailand_4_123', 'GID_0_GBR')  -> FlowResult dict
+RouteResult = dict[tuple[str, str], FlowResult]
 
 
 def init_worker(graph_filepath: str, od_filepath: str) -> None:
@@ -52,13 +52,13 @@ def route_from_node(from_node: str) -> RouteResult:
         from_node: Node ID of source node.
 
     Returns:
-        Mapping from source node, to destination country node, to value of
+        Mapping from (source node, destination country node) key, to value of
             flow, volume of flow and list of edge ids of route.
     """
     print(f"Process {os.getpid()} routing {from_node}...")
 
     from_node_od = od[od.id == from_node]
-    destination_nodes = [f"GID_0_{iso_a3}" for iso_a3 in from_node_od.partner_GID_0.unique()]
+    destination_nodes: list[str] = [f"GID_0_{iso_a3}" for iso_a3 in from_node_od.partner_GID_0.unique()]
 
     routes_edge_list = []
     try:
@@ -92,14 +92,13 @@ def route_from_node(from_node: str) -> RouteResult:
         value_kusd, = route.value_kusd
         volume_tons, = route.volume_tons
 
-        routes[from_node] = {
-            destination_node: {
-                "value_kusd": value_kusd,
-                "volume_tons": volume_tons,
-                "edge_indicies": routes_edge_list[i]
-            }
+        routes[(from_node, destination_node)] = {
+            "value_kusd": value_kusd,
+            "volume_tons": volume_tons,
+            "edge_indices": routes_edge_list[i]
         }
 
+    print(f"Process {os.getpid()} finished routing {from_node}...")
     return routes
 
 
@@ -116,7 +115,7 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
 
     Returns:
         Mapping from source node, to destination country node, to flow in value
-            and volume along this route and list of edge indicies constituting
+            and volume along this route and list of edge indices constituting
             the route.
     """
 
@@ -138,24 +137,20 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
     print("Routing...")
     start = time.time()
     from_nodes = od.id.unique()
-    routes = []
     args = ((from_node,) for from_node in from_nodes)
-    # as each process is created, it will load the graph from disk in init_worker
-    # and then persist these in memory as globals between chunks of work
+    # as each process is created, it will load the graph and od from disk in
+    # init_worker and then persist these in memory as globals between chunks
     with multiprocessing.Pool(
         processes=n_cpu,
         initializer=init_worker,
         initargs=(graph_filepath, od_filepath),
     ) as pool:
-        routes = pool.starmap(route_from_node, args)
+        routes: list[RouteResult] = pool.starmap(route_from_node, args)
 
     print("\n")
     print(f"Routing completed in {time.time() - start:.2f}s")
 
     temp_dir.cleanup()
 
-    # combine our list of singleton dicts into one dict with multiple keys
-    combined = {k: v for item in routes for (k, v) in item.items()}
-    if len(combined) != len(routes):
-        breakpoint()
-    return combined
+    # flatten our list of RouteResult dicts into one dict
+    return {k: v for item in routes for (k, v) in item.items()}
