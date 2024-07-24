@@ -48,6 +48,7 @@ rule create_maritime_network:
         maritime_nodes.to_parquet(output.nodes)
         maritime_edges.to_parquet(output.edges)
 
+
 rule plot_port_connections:
     input:
         nodes = "{OUTPUT_DIR}/maritime_network/nodes.gpq",
