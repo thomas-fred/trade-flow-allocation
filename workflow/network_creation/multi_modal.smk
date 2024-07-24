@@ -20,34 +20,56 @@ rule create_multi_modal_network:
         "./multi_modal.py"
 
 
-rule remove_edges_due_to_hazard:
+rule remove_edges_in_excess_of_threshold:
     """
-    Take a multi-modal network and remove edges that experience hazard values in
-    excess of a given threshold.
+    Take part of multi-modal network and remove edges that experience hazard
+    values in excess of a given threshold.
     """
     input:
-        nodes = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/nodes.gpq",
         edges = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/edges.gpq",
         raster = "{OUTPUT_DIR}/hazard/{HAZARD}.tif",
     output:
-        nodes = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/{HAZARD}/nodes.gpq",
-        edges = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/{HAZARD}/edges.gpq",
+        edges = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/{HAZARD}/chunks/{CHUNK}/edges.gpq"
     run:
-        import os
-        os.environ["SNAIL_PROGRESS"] = "1"
-
         import geopandas as gpd
-        import pandas as pd
+        import numpy as np
 
         from trade_flow.disruption import filter_edges_by_raster
 
-        nodes = gpd.read_parquet(input.nodes)
-        nodes.to_parquet(output.nodes)
-        del nodes
-
+        i = int(wildcards.CHUNK.split("-")[-1])
         edges = gpd.read_parquet(input.edges)
-        land_mask = edges["mode"].isin({"road", "rail"})
-        land_edges = edges.loc[land_mask, :].copy()
-        land_edges_post_hazard = filter_edges_by_raster(land_edges, input.raster, float(config["edge_failure_threshold"]))
-        edges = pd.concat([edges.loc[~land_mask, :], land_edges_post_hazard])
+        edges = edges.loc[edges["mode"].isin({"road", "rail"}), :]
+        chunk_size = int(np.ceil(len(edges) / workflow.cores))
+        print(f"Chunk {i}: intersecting edges [{i * chunk_size}: {(i + 1) * chunk_size}]")
+
+        surviving_edges = filter_edges_by_raster(
+            edges.iloc[i * chunk_size: (i + 1) * chunk_size, :],
+            input.raster,
+            float(config["edge_failure_threshold"])
+        )
+
+        surviving_edges.to_parquet(output.edges)
+
+
+rule join_intersection_results:
+    """
+    Pull together chunks of intersection operation to remove edges exceeding threshold value.
+    """
+    input:
+        all_edges = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/edges.gpq",
+        intersected_edges = expand(
+            "{{OUTPUT_DIR}}/multi-modal_network/{{PROJECT}}/{{HAZARD}}/chunks/chunk-{chunk}/edges.gpq",
+            chunk=range(0, workflow.cores)
+        )
+    output:
+        edges = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/{HAZARD}/edges.gpq",
+    run:
+        import geopandas as gpd
+        import pandas as pd
+
+        all_edges = gpd.read_parquet(input.all_edges)
+
+        intersected_edges_post_hazard = pd.concat([gpd.read_parquet(path) for path in input.intersected_edges])
+        edges = pd.concat([all_edges.loc[~all_edges["mode"].isin({"road", "rail"}), :], intersected_edges_post_hazard])
+
         edges.to_parquet(output.edges)

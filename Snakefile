@@ -8,6 +8,7 @@ wildcard_constraints:
     OUTPUT_DIR="^.*results",
     PROJECT="project-[^_/]+",
     HAZARD="hazard-[^_/]+",
+    CHUNK="chunk-[\d]+",
 
 include: "workflow/network_creation/maritime.smk"
 include: "workflow/network_creation/multi_modal.smk"
