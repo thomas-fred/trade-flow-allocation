@@ -28,7 +28,7 @@ if __name__ == "__main__":
     od = od[od.partner_GID_0.isin(available_country_destinations)]
     print(f"After dropping unrouteable destination countries, OD has {len(od):,d} flows")
 
-    routes: RouteResult = route_from_all_nodes(od, edges, snakemake.params.n_cpu)
+    routes: RouteResult = route_from_all_nodes(od, edges, snakemake.threads)
 
     print("Writing routes to disk as parquet...")
     pd.DataFrame(routes).T.to_parquet(snakemake.output.routes)

@@ -5,10 +5,10 @@ rule allocate_intact_network:
     input:
         edges = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/edges.gpq",
         od = "{OUTPUT_DIR}/input/trade_matrix/{PROJECT}/trade_nodes_total.parquet",
+    threads: workflow.cores
     params:
         # if this changes, we want to trigger a re-run
         minimum_flow_volume_t = config["minimum_flow_volume_t"],
-        n_cpu = workflow.cores
     output:
         routes = "{OUTPUT_DIR}/flow_allocation/{PROJECT}/routes.pq",
         edges_with_flows = "{OUTPUT_DIR}/flow_allocation/{PROJECT}/edges.gpq",
@@ -24,10 +24,10 @@ rule allocate_degraded_network:
     input:
         edges = "{OUTPUT_DIR}/multi-modal_network/{PROJECT}/{HAZARD}/edges.gpq",
         od = "{OUTPUT_DIR}/input/trade_matrix/{PROJECT}/trade_nodes_total.parquet",
+    threads: workflow.cores
     params:
         # if this changes, we want to trigger a re-run
         minimum_flow_volume_t = config["minimum_flow_volume_t"],
-        n_cpu = workflow.cores
     output:
         routes = "{OUTPUT_DIR}/flow_allocation/{PROJECT}/{HAZARD}/routes.pq",
         edges_with_flows = "{OUTPUT_DIR}/flow_allocation/{PROJECT}/{HAZARD}/edges.gpq",
