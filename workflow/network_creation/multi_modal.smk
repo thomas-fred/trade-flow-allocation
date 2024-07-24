@@ -37,6 +37,7 @@ rule remove_edges_due_to_hazard:
         os.environ["SNAIL_PROGRESS"] = "1"
 
         import geopandas as gpd
+        import pandas as pd
 
         from trade_flow.disruption import filter_edges_by_raster
 
@@ -45,5 +46,8 @@ rule remove_edges_due_to_hazard:
         del nodes
 
         edges = gpd.read_parquet(input.edges)
-        edges = filter_edges_by_raster(edges, input.raster, float(config["edge_failure_threshold"]))
+        land_mask = edges["mode"].isin({"road", "rail"})
+        land_edges = edges.loc[land_mask, :].copy()
+        land_edges_post_hazard = filter_edges_by_raster(land_edges, input.raster, float(config["edge_failure_threshold"]))
+        edges = pd.concat([edges.loc[~land_mask, :], land_edges_post_hazard])
         edges.to_parquet(output.edges)
