@@ -7,6 +7,7 @@ wildcard_constraints:
     # but is more flexible than reading a value from, for example, config.yaml
     OUTPUT_DIR="^.*results",
     PROJECT="project-[^_/]+",
+    HAZARD="hazard-[^_/]+",
 
 include: "workflow/network_creation/maritime.smk"
 include: "workflow/network_creation/multi_modal.smk"
