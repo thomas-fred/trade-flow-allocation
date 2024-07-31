@@ -10,6 +10,7 @@ import time
 import igraph as ig
 import geopandas as gpd
 import pandas as pd
+from tqdm import tqdm
 
 
 # dict containing:
@@ -154,3 +155,50 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
 
     # flatten our list of RouteResult dicts into one dict
     return {k: v for item in routes for (k, v) in item.items()}
+
+
+def lookup_route_costs(routes_path: str, edges_path: str) -> pd.DataFrame:
+    """
+    For each route (source -> destination pair), lookup the edges
+    of the least cost route (the route taken) and sum those costs.
+    Store alongside value and volume of route.
+
+    Args:
+        routes_path: Path to routes table, should have multi-index: (source node,
+            destination node) and include value_kusd, volume_tons and edge_indices
+            columns
+        edges_path: Path to edges table, should have cost_USD_t column which we
+            will positional index into with edge_indices from the routes table.
+
+    Returns:
+        Routes appended with their total cost in USD t-1
+    """
+    routes_with_edge_indices: pd.DataFrame = pd.read_parquet(routes_path)
+    edges: gpd.GeoDataFrame = gpd.read_parquet(edges_path)
+    cost_col_id = edges.columns.get_loc("cost_USD_t")
+    routes = []
+    for index, route_data in tqdm(routes_with_edge_indices.iterrows(), total=len(routes_with_edge_indices)):
+        source_node, destination_node = index
+        cost_USD_t = edges.iloc[route_data.edge_indices, cost_col_id].sum()
+        if 1E6 < cost_USD_t < 2E6:
+            cost_USD_t -= 1E6
+        elif cost_USD_t == 0:
+            pass
+        else:
+            # cost more than $2M USD means more than one $1M USD imaginary link
+            # not a valid route, discard these
+            continue
+        routes.append(
+            (
+                source_node,
+                destination_node.split("_")[-1],
+                route_data.value_kusd,
+                route_data.volume_tons,
+                cost_USD_t
+            )
+        )
+
+    return pd.DataFrame(
+        routes,
+        columns=["source_node", "destination_node", "value_kusd", "volume_tons", "cost_USD_t"]
+    )
