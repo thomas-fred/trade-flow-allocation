@@ -49,12 +49,52 @@ rule create_maritime_network:
         maritime_edges.to_parquet(output.edges)
 
 
-rule plot_port_connections:
+rule plot_maritime_network:
     input:
         nodes = "{OUTPUT_DIR}/maritime_network/nodes.gpq",
         edges = "{OUTPUT_DIR}/maritime_network/edges.gpq",
     output:
         edges_plot = "{OUTPUT_DIR}/maritime_network/edges.png",
+    run:
+        import geopandas as gpd
+        import matplotlib
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        from trade_flow.plot import chop_at_antimeridian
+
+        matplotlib.use("Agg")
+        plt.style.use("bmh")
+
+        world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+        world.geometry = world.geometry.boundary
+
+        maritime_nodes = gpd.read_parquet(input.nodes)
+        maritime_edges = gpd.read_parquet(input.edges)
+
+        # whole network
+        f, ax = plt.subplots(figsize=(16, 7))
+        chop_at_antimeridian(maritime_edges, drop_null_geometry=True).plot(
+            ax=ax,
+            linewidth=0.5,
+            alpha=0.8
+        )
+        world.plot(ax=ax, lw=0.5, alpha=0.2)
+        ax.set_xticks(np.linspace(-180, 180, 13))
+        ax.set_yticks([-60, -30, 0, 30, 60])
+        ax.set_ylim(-65, 85)
+        ax.set_xlim(-180, 180)
+        ax.grid(alpha=0.3)
+        ax.set_xlabel("Longitude [deg]")
+        ax.set_ylabel("Latitude [deg]")
+        f.savefig(output.edges_plot)
+
+
+rule plot_port_connections:
+    input:
+        nodes = "{OUTPUT_DIR}/maritime_network/nodes.gpq",
+        edges = "{OUTPUT_DIR}/maritime_network/edges.gpq",
+    output:
         port_trade_plots = directory("{OUTPUT_DIR}/maritime_network/port_trade_plots"),
     run:
         import os
@@ -64,42 +104,37 @@ rule plot_port_connections:
         import matplotlib.pyplot as plt
         from tqdm import tqdm
 
+        from trade_flow.plot import chop_at_antimeridian
+
         matplotlib.use("Agg")
+        plt.style.use("bmh")
 
         maritime_nodes = gpd.read_parquet(input.nodes)
         maritime_edges = gpd.read_parquet(input.edges)
-
-        # diagnostic plotting
-        f, ax = plt.subplots(figsize=(16, 16))
-        maritime_edges.to_crs(epsg=3995).plot(
-            ax=ax,
-            linewidth=0.5,
-            alpha=1
-        )
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-        f.savefig(output.edges_plot)
 
         # disambiguate the global view and plot the routes from each port, one port at a time
         world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
         world.geometry = world.geometry.boundary
 
         ports = maritime_edges.from_port.unique()
-        stereographic_proj: int = 3995
         os.makedirs(output.port_trade_plots)
         for port_id in tqdm(ports):
             filepath = os.path.join(output.port_trade_plots, f"{port_id}.png")
             f, ax = plt.subplots(figsize=(10,10))
             port = maritime_nodes[maritime_nodes.id == f"{port_id}_land"]
-            routes = maritime_edges[maritime_edges.from_port == port_id].to_crs(epsg=stereographic_proj)
+            routes = maritime_edges[maritime_edges.from_port == port_id]
             if all(routes.geometry.isna()):
                 continue
-            routes.plot(
-                column="to_port",
-                categorical=True,
-                ax=ax
-            )
-            maritime_nodes[maritime_nodes.id == f"{port_id}_land"].to_crs(epsg=stereographic_proj).plot(
+            try:
+                chop_at_antimeridian(routes, drop_null_geometry=True).plot(
+                    column="to_port",
+                    categorical=True,
+                    ax=ax
+                )
+            except ValueError:
+                print(f"Failed to plot {port_id}, skipping...")
+                continue
+            maritime_nodes[maritime_nodes.id == f"{port_id}_land"].plot(
                 ax=ax,
                 markersize=500,
                 marker="*",
@@ -108,7 +143,7 @@ rule plot_port_connections:
             )
             xmin, xmax = ax.get_xlim()
             ymin, ymax = ax.get_ylim()
-            world.to_crs(epsg=stereographic_proj).plot(ax=ax, linewidth=0.5, alpha=0.4)
+            world.plot(ax=ax, linewidth=0.5, alpha=0.4)
             ax.set_xlim(xmin, xmax)
             ax.set_ylim(ymin, ymax)
             port_name, = port.name
