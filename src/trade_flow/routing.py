@@ -26,6 +26,17 @@ FlowResult = dict[str, float | list[int]]
 RouteResult = dict[tuple[str, str], FlowResult]
 
 
+# We do not do routing within partner countries, instead we terminate at a port
+# in the destination country. Destination country nodes are connected to ports by
+# special edges. We give these edges a very high value, so that least cost route
+# finding will take them as a last resort (no other lower cost route is
+# available).
+
+# When calculating the total cost of a route, we want to be able to identify
+# these imaginary links and remove them.
+DESTINATION_LINK_COST_USD_T: float = 1E6
+
+
 def init_worker(graph_filepath: str, od_filepath: str) -> None:
     """
     Create global variables referencing graph and OD to persist through worker lifetime.
@@ -157,7 +168,11 @@ def route_from_all_nodes(od: pd.DataFrame, edges: gpd.GeoDataFrame, n_cpu: int) 
     return {k: v for item in routes for (k, v) in item.items()}
 
 
-def lookup_route_costs(routes_path: str, edges_path: str) -> pd.DataFrame:
+def lookup_route_costs(
+    routes_path: str,
+    edges_path: str,
+    destination_link_cost_USD_t: float = DESTINATION_LINK_COST_USD_T
+) -> pd.DataFrame:
     """
     For each route (source -> destination pair), lookup the edges
     of the least cost route (the route taken) and sum those costs.
@@ -169,6 +184,9 @@ def lookup_route_costs(routes_path: str, edges_path: str) -> pd.DataFrame:
             columns
         edges_path: Path to edges table, should have cost_USD_t column which we
             will positional index into with edge_indices from the routes table.
+        destination_link_cost_USD_t: Cost of traversing 'destination' links, to
+            partner entities. There should only be one of these links in any given
+            route.
 
     Returns:
         Routes appended with their total cost in USD t-1
@@ -179,24 +197,24 @@ def lookup_route_costs(routes_path: str, edges_path: str) -> pd.DataFrame:
     routes = []
     for index, route_data in tqdm(routes_with_edge_indices.iterrows(), total=len(routes_with_edge_indices)):
         source_node, destination_node = index
-        cost_USD_t = edges.iloc[route_data.edge_indices, cost_col_id].sum()
-        if 1E6 < cost_USD_t < 2E6:
-            cost_USD_t -= 1E6
-        elif cost_USD_t == 0:
-            pass
-        else:
-            # cost more than $2M USD means more than one $1M USD imaginary link
-            # not a valid route, discard these
+        cost_including_destination_link_USD_t = edges.iloc[route_data.edge_indices, cost_col_id].sum()
+
+        cost_USD_t: float = cost_including_destination_link_USD_t % destination_link_cost_USD_t
+
+        if int(cost_including_destination_link_USD_t // destination_link_cost_USD_t) != 1:
+            # must have exactly 1 destination link, otherwise not a valid route
             continue
-        routes.append(
-            (
-                source_node,
-                destination_node.split("_")[-1],
-                route_data.value_kusd,
-                route_data.volume_tons,
-                cost_USD_t
+
+        if cost_USD_t != 0:
+            routes.append(
+                (
+                    source_node,
+                    destination_node.split("_")[-1],
+                    route_data.value_kusd,
+                    route_data.volume_tons,
+                    cost_USD_t
+                )
             )
-        )
 
     return pd.DataFrame(
         routes,

@@ -11,6 +11,7 @@ from trade_flow.network_creation import (
     preprocess_rail_network, create_edges_to_nearest_nodes,
     find_importing_node_id, create_edges_to_destination_countries
 )
+from trade_flow.routing import DESTINATION_LINK_COST_USD_T
 
 matplotlib.use("Agg")
 
@@ -172,7 +173,11 @@ if __name__ == "__main__":
     # connect foreign ports to their country with new edges
     foreign_ports = maritime_nodes[maritime_nodes.infra=="port"]
     foreign_ports = foreign_ports[foreign_ports.iso_a3 != study_country]
-    port_to_importing_countries_edges = create_edges_to_destination_countries(foreign_ports, destination_country_nodes)
+    port_to_importing_countries_edges = create_edges_to_destination_countries(
+        foreign_ports,
+        destination_country_nodes,
+        DESTINATION_LINK_COST_USD_T
+    )
 
     # add in edges connecting destination countries to THA land borders and foreign ports
     edges = pd.concat(
